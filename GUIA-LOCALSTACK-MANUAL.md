@@ -23,7 +23,7 @@ SNS report-events ─┬─► SQS report-requests   (+DLQ) ──► Lambda rep
 6. [Lambdas y sus triggers](#6-lambdas-y-sus-triggers)
 7. [Invocar una Lambda a mano y ver sus logs](#7-invocar-una-lambda-a-mano-y-ver-sus-logs)
 8. [Conectar tu servidor a LocalStack](#8-conectar-tu-servidor-a-localstack)
-   - [8.1 Ejemplo mínimo: una API Spring Boot de prueba que envía a SQS](#81-ejemplo-mínimo-una-api-spring-boot-de-prueba-que-envía-a-sqs-sin-autenticación)
+   - [8.1 Ejemplo mínimo: una API Spring Boot de prueba que publica en SNS](#81-ejemplo-mínimo-una-api-spring-boot-de-prueba-que-publica-en-sns-sin-autenticación)
 9. [Pasar a AWS real](#9-pasar-a-aws-real)
 10. [Inspeccionar, depurar y limpiar](#10-inspeccionar-depurar-y-limpiar)
 11. [Errores frecuentes](#11-errores-frecuentes)
@@ -1076,51 +1076,81 @@ Debe responder `202 Accepted` con un `requestId`.
 
 **Qué NO debe llegar nunca a producción:** `AWS_ENDPOINT_URL`, las claves `test`, `NOTIFY_MODE=log`, `DATABASE_SSL=false` y el `…ISSUER_URI` local. En el despliegue real, el contenedor del BFF se inicia sin ellas (mira `deploy.yml`: solo define las de producción).
 
-### 8.1 Ejemplo mínimo: una API Spring Boot de prueba que envía a SQS (sin autenticación)
-Una API de unas 25 líneas, **sin Spring Security, sin Cognito y sin nada**, con un solo endpoint: lo que recibes en el cuerpo se envía tal cual a una cola de SQS. Sirve para ver de punta a punta cómo un servidor Java publica en SQS contra LocalStack, y cómo cambiaría para AWS real.
+### 8.1 Ejemplo mínimo: una API Spring Boot de prueba que publica en SNS (sin autenticación)
+Una API de unas 25 líneas, **sin Spring Security, sin Cognito y sin nada**, con un solo endpoint: lo que recibes en el cuerpo se **publica en el topic de SNS** `report-events`. Con eso se recorre el flujo completo del proyecto: **API → SNS → (filtro) → las dos colas → las dos Lambdas**. Es, simplificado, lo que hace el BFF real con `POST /api/reports`.
 
-> **Solo para pruebas.** Un endpoint abierto que escribe en una cola es un agujero de seguridad. Esta API escucha únicamente en `127.0.0.1` (tu máquina) y usa el puerto 8081 para no chocar con el BFF (8080). **No la despliegues así.**
+> **Solo para pruebas.** Un endpoint abierto que publica en un topic es un agujero de seguridad. Esta API escucha únicamente en `127.0.0.1` (tu máquina) y usa el puerto 8081 para no chocar con el BFF (8080). **No la despliegues así.**
 
-Requisitos: Java 21 y que LocalStack esté arriba con tu perfil activo (partes 2 y 3).
+**Requisitos:** Java 21, LocalStack arriba con tu perfil activo (partes 2 y 3), y el flujo ya construido en las partes **4** (topic, colas y suscripciones), **6** (las dos Lambdas con sus triggers) y, si quieres ver el aviso en tu app, **6.9**. Todo en la **misma terminal**, porque se usa la variable `TOPIC_ARN` de la parte 4.1.
 
-**1. Una cola de destino.** Una cola nueva y sin Lambda conectada, para poder leer el mensaje de vuelta:
-
-**bash**
-```bash
-TEST_QUEUE_URL=$(aws sqs create-queue --queue-name test-api-queue --query QueueUrl --output text)
-echo "$TEST_QUEUE_URL"
-```
-**PowerShell**
-```powershell
-$TEST_QUEUE_URL = aws sqs create-queue --queue-name test-api-queue --query QueueUrl --output text
-$TEST_QUEUE_URL
-```
-
-**2. Generar el proyecto con Spring Initializr** (la herramienta oficial de Spring para crear proyectos; aquí por línea de comandos, con la dependencia web):
+**1. Generar el proyecto con Spring Initializr** (la herramienta oficial de Spring para crear proyectos; aquí por línea de comandos, con la dependencia web):
 
 **bash**
 ```bash
 curl -s https://start.spring.io/starter.zip \
   -d type=gradle-project -d language=java -d javaVersion=21 \
-  -d groupId=com.example -d artifactId=sqs-test-api -d name=sqs-test-api \
-  -d packageName=com.example.sqstest -d dependencies=web \
-  -o sqs-test-api.zip
-mkdir sqs-test-api && unzip -q sqs-test-api.zip -d sqs-test-api
-cd sqs-test-api
+  -d groupId=com.example -d artifactId=sns-test-api -d name=sns-test-api \
+  -d packageName=com.example.snstest -d dependencies=web \
+  -o sns-test-api.zip
+mkdir sns-test-api && unzip -q sns-test-api.zip -d sns-test-api
+cd sns-test-api
 ```
 **PowerShell**
 ```powershell
 curl.exe -s https://start.spring.io/starter.zip `
   -d type=gradle-project -d language=java -d javaVersion=21 `
-  -d groupId=com.example -d artifactId=sqs-test-api -d name=sqs-test-api `
-  -d packageName=com.example.sqstest -d dependencies=web `
-  -o sqs-test-api.zip
-mkdir sqs-test-api; tar -xf sqs-test-api.zip -C sqs-test-api
-cd sqs-test-api
+  -d groupId=com.example -d artifactId=sns-test-api -d name=sns-test-api `
+  -d packageName=com.example.snstest -d dependencies=web `
+  -o sns-test-api.zip
+mkdir sns-test-api; tar -xf sns-test-api.zip -C sns-test-api
+cd sns-test-api
 ```
 Si prefieres una interfaz gráfica, https://start.spring.io ofrece lo mismo: proyecto Gradle (Groovy), Java 21, dependencia "Spring Web".
 
-**3. Agregar el SDK de AWS para SQS.** El proyecto generado no lo trae. Se agrega al final de `build.gradle`; el *BOM* (`platform`) fija las versiones de todos los módulos del SDK:
+> **Si Gradle falla al compilar (típico en Windows y en redes corporativas)**, hay dos causas habituales:
+>
+> **1. Tu JDK no es el 21.** El proyecto generado le pide a Gradle un JDK concreto (*toolchain*): si no lo encuentra, intenta descargarlo, y sin red falla con `No matching toolchains found for requested specification`. Mira cuál tienes con `java --version` y genera el proyecto con esa versión (`-d javaVersion=26`, por ejemplo), o edita en `build.gradle`:
+> ```groovy
+> java {
+>     toolchain {
+>         languageVersion = JavaLanguageVersion.of(26)   // el número de tu JDK (Spring Boot pide Java 17 o superior)
+>     }
+> }
+> ```
+>
+> **2. Tu red no alcanza Maven Central** (`repo.maven.apache.org`) y Gradle falla con `Could not resolve …` o `Could not GET …`. Se soluciona usando un **espejo de Maven Central** en lugar del repositorio por defecto. Esta configuración, con el espejo que aloja Google, se usó en Windows con este mismo proyecto. En `build.gradle`, reemplaza el bloque `repositories` (que trae `mavenCentral()`):
+> ```groovy
+> repositories {
+>     maven {
+>         url = uri("https://maven-central.storage-download.googleapis.com/maven2/")
+>     }
+> }
+> ```
+> y en `settings.gradle` agrega, **antes** de la línea `rootProject.name`, los dos bloques siguientes. El primero hace lo mismo para los *plugins* de Gradle (el de Spring Boot se descarga por ahí; se conserva `gradlePluginPortal()` como respaldo), y el segundo evita que Gradle ignore el espejo:
+> ```groovy
+> pluginManagement {
+>     repositories {
+>         maven {
+>             url = uri("https://maven-central.storage-download.googleapis.com/maven2/")
+>         }
+>         gradlePluginPortal()
+>     }
+> }
+>
+> dependencyResolutionManagement {
+>     repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
+>     repositories {
+>         maven {
+>             url = uri("https://maven-central.storage-download.googleapis.com/maven2/")
+>         }
+>     }
+> }
+>
+> rootProject.name = 'sns-test-api'
+> ```
+> Si tu red también bloquea el *Gradle Plugin Portal* (`plugins.gradle.org`), pide a tu equipo de TI que lo permita o que provea un espejo propio. El resto del proyecto (dependencias, código) no cambia: el `build.gradle` final queda con `spring-boot-starter-webmvc`, el BOM del SDK de AWS y `software.amazon.awssdk:sns`, tal como en los pasos 1 y 2.
+
+**2. Agregar el SDK de AWS para SNS.** El proyecto generado no lo trae. Se agrega al final de `build.gradle`; el *BOM* (`platform`) fija las versiones de todos los módulos del SDK:
 
 **bash**
 ```bash
@@ -1128,7 +1158,7 @@ cat >> build.gradle <<'EOF'
 
 dependencies {
     implementation platform('software.amazon.awssdk:bom:2.29.52')
-    implementation 'software.amazon.awssdk:sqs'
+    implementation 'software.amazon.awssdk:sns'
 }
 EOF
 ```
@@ -1138,36 +1168,36 @@ EOF
 
 dependencies {
     implementation platform('software.amazon.awssdk:bom:2.29.52')
-    implementation 'software.amazon.awssdk:sqs'
+    implementation 'software.amazon.awssdk:sns'
 }
 '@ | Add-Content -Encoding ascii build.gradle
 ```
 
-**4. El código: un cliente de SQS y un endpoint.**
+**3. El código: un cliente de SNS y un endpoint.**
 
 **bash**
 ```bash
-cat > src/main/java/com/example/sqstest/SqsConfig.java <<'EOF'
-package com.example.sqstest;
+cat > src/main/java/com/example/snstest/SnsConfig.java <<'EOF'
+package com.example.snstest;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import software.amazon.awssdk.services.sqs.SqsClient;
+import software.amazon.awssdk.services.sns.SnsClient;
 
 @Configuration
-public class SqsConfig {
+public class SnsConfig {
 
     // Sin región, claves ni endpoint en el código: todo sale del entorno (AWS_REGION, credenciales y
     // AWS_ENDPOINT_URL). Por eso el mismo código sirve para LocalStack y para AWS real.
     @Bean
-    public SqsClient sqsClient() {
-        return SqsClient.create();
+    public SnsClient snsClient() {
+        return SnsClient.create();
     }
 }
 EOF
 
-cat > src/main/java/com/example/sqstest/SqsTestController.java <<'EOF'
-package com.example.sqstest;
+cat > src/main/java/com/example/snstest/SnsTestController.java <<'EOF'
+package com.example.snstest;
 
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
@@ -1176,63 +1206,63 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import software.amazon.awssdk.services.sqs.SqsClient;
-import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
+import software.amazon.awssdk.services.sns.SnsClient;
+import software.amazon.awssdk.services.sns.model.PublishRequest;
 
 @RestController
 @RequestMapping("/api/test")
-public class SqsTestController {
+public class SnsTestController {
 
-    private final SqsClient sqs;
-    private final String queueUrl;
+    private final SnsClient sns;
+    private final String topicArn;
 
-    public SqsTestController(SqsClient sqs, @Value("${app.sqs.queue-url}") String queueUrl) {
-        this.sqs = sqs;
-        this.queueUrl = queueUrl;
+    public SnsTestController(SnsClient sns, @Value("${app.sns.topic-arn}") String topicArn) {
+        this.sns = sns;
+        this.topicArn = topicArn;
     }
 
-    // Lo que llegue en el cuerpo se envía tal cual a la cola.
-    @PostMapping("/sqs")
-    public ResponseEntity<Map<String, String>> send(@RequestBody String body) {
-        String messageId = sqs.sendMessage(SendMessageRequest.builder()
-                .queueUrl(queueUrl)
-                .messageBody(body)
+    // Lo que llegue en el cuerpo se publica tal cual en el topic de SNS.
+    @PostMapping("/sns")
+    public ResponseEntity<Map<String, String>> publish(@RequestBody String body) {
+        String messageId = sns.publish(PublishRequest.builder()
+                .topicArn(topicArn)
+                .message(body)
                 .build()).messageId();
-        return ResponseEntity.accepted().body(Map.of("messageId", messageId, "queueUrl", queueUrl));
+        return ResponseEntity.accepted().body(Map.of("messageId", messageId, "topicArn", topicArn));
     }
 }
 EOF
 
 cat > src/main/resources/application.properties <<'EOF'
-spring.application.name=sqs-test-api
+spring.application.name=sns-test-api
 server.port=8081
 server.address=127.0.0.1
-app.sqs.queue-url=${SQS_QUEUE_URL}
+app.sns.topic-arn=${SNS_TOPIC_ARN}
 EOF
 ```
 **PowerShell**
 ```powershell
 @'
-package com.example.sqstest;
+package com.example.snstest;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import software.amazon.awssdk.services.sqs.SqsClient;
+import software.amazon.awssdk.services.sns.SnsClient;
 
 @Configuration
-public class SqsConfig {
+public class SnsConfig {
 
     // Sin región, claves ni endpoint en el código: todo sale del entorno (AWS_REGION, credenciales y
     // AWS_ENDPOINT_URL). Por eso el mismo código sirve para LocalStack y para AWS real.
     @Bean
-    public SqsClient sqsClient() {
-        return SqsClient.create();
+    public SnsClient snsClient() {
+        return SnsClient.create();
     }
 }
-'@ | Set-Content -Encoding ascii src/main/java/com/example/sqstest/SqsConfig.java
+'@ | Set-Content -Encoding ascii src/main/java/com/example/snstest/SnsConfig.java
 
 @'
-package com.example.sqstest;
+package com.example.snstest;
 
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
@@ -1241,122 +1271,165 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import software.amazon.awssdk.services.sqs.SqsClient;
-import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
+import software.amazon.awssdk.services.sns.SnsClient;
+import software.amazon.awssdk.services.sns.model.PublishRequest;
 
 @RestController
 @RequestMapping("/api/test")
-public class SqsTestController {
+public class SnsTestController {
 
-    private final SqsClient sqs;
-    private final String queueUrl;
+    private final SnsClient sns;
+    private final String topicArn;
 
-    public SqsTestController(SqsClient sqs, @Value("${app.sqs.queue-url}") String queueUrl) {
-        this.sqs = sqs;
-        this.queueUrl = queueUrl;
+    public SnsTestController(SnsClient sns, @Value("${app.sns.topic-arn}") String topicArn) {
+        this.sns = sns;
+        this.topicArn = topicArn;
     }
 
-    // Lo que llegue en el cuerpo se envía tal cual a la cola.
-    @PostMapping("/sqs")
-    public ResponseEntity<Map<String, String>> send(@RequestBody String body) {
-        String messageId = sqs.sendMessage(SendMessageRequest.builder()
-                .queueUrl(queueUrl)
-                .messageBody(body)
+    // Lo que llegue en el cuerpo se publica tal cual en el topic de SNS.
+    @PostMapping("/sns")
+    public ResponseEntity<Map<String, String>> publish(@RequestBody String body) {
+        String messageId = sns.publish(PublishRequest.builder()
+                .topicArn(topicArn)
+                .message(body)
                 .build()).messageId();
-        return ResponseEntity.accepted().body(Map.of("messageId", messageId, "queueUrl", queueUrl));
+        return ResponseEntity.accepted().body(Map.of("messageId", messageId, "topicArn", topicArn));
     }
 }
-'@ | Set-Content -Encoding ascii src/main/java/com/example/sqstest/SqsTestController.java
+'@ | Set-Content -Encoding ascii src/main/java/com/example/snstest/SnsTestController.java
 
 @'
-spring.application.name=sqs-test-api
+spring.application.name=sns-test-api
 server.port=8081
 server.address=127.0.0.1
-app.sqs.queue-url=${SQS_QUEUE_URL}
+app.sns.topic-arn=${SNS_TOPIC_ARN}
 '@ | Set-Content -Encoding ascii src/main/resources/application.properties
 ```
-- **`SqsClient.create()`** no recibe nada: el SDK busca por sí solo la región (`AWS_REGION`), las credenciales y, desde la versión 2.21, el endpoint (`AWS_ENDPOINT_URL`). Es lo que permite cambiar de LocalStack a AWS real sin tocar el código.
-- **`@RequestBody String`** recibe el cuerpo crudo, sin interpretarlo como JSON: así la API no necesita ninguna librería de JSON y envía exactamente lo que le mandes.
+- **`SnsClient.create()`** no recibe nada: el SDK busca por sí solo la región (`AWS_REGION`), las credenciales y, desde la versión 2.21, el endpoint (`AWS_ENDPOINT_URL`). Es lo que permite cambiar de LocalStack a AWS real sin tocar el código.
+- **`@RequestBody String`** recibe el cuerpo crudo, sin interpretarlo como JSON: así la API no necesita ninguna librería de JSON y publica exactamente lo que le mandes.
+- **`publish` sin atributos de mensaje:** el filtro de las suscripciones mira el campo `type` **dentro** del JSON del cuerpo (parte 4.2), no atributos.
 - **`server.address=127.0.0.1`** hace que solo tu máquina pueda llamarla.
 
-**5. Arrancarla**, apuntando a LocalStack y a la cola. Hazlo **en la misma terminal del paso 1**, donde existe `TEST_QUEUE_URL`. Es un proceso que no termina: déjalo corriendo y abre otra terminal para el paso siguiente (la primera vez Gradle descarga sus dependencias y puede tardar):
+**4. Arrancarla**, apuntando a LocalStack y al topic. Hazlo **en la misma terminal de la parte 4.1**, donde existe `TOPIC_ARN`. Es un proceso que no termina: déjalo corriendo y abre otra terminal para los pasos siguientes (la primera vez Gradle descarga sus dependencias y puede tardar):
 
 **bash**
 ```bash
+[[ "$TOPIC_ARN" == arn:aws:sns:* ]] || { echo "TOPIC_ARN no es un ARN válido (repite la parte 4.1)"; false; } && \
 AWS_ENDPOINT_URL=http://localhost:4566 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
-AWS_REGION=us-east-2 SQS_QUEUE_URL="$TEST_QUEUE_URL" \
+AWS_REGION=us-east-2 SNS_TOPIC_ARN="$TOPIC_ARN" \
 ./gradlew bootRun
 ```
 **PowerShell**
 ```powershell
+if ($TOPIC_ARN -notlike "arn:aws:sns:*") { throw "TOPIC_ARN no es un ARN válido (repite la parte 4.1)" }
 $env:AWS_ENDPOINT_URL = "http://localhost:4566"
 $env:AWS_ACCESS_KEY_ID = "test"
 $env:AWS_SECRET_ACCESS_KEY = "test"
 $env:AWS_REGION = "us-east-2"
-$env:SQS_QUEUE_URL = $TEST_QUEUE_URL
+$env:SNS_TOPIC_ARN = $TOPIC_ARN
 .\gradlew.bat bootRun
 ```
-Cuando veas `Started SqsTestApiApplication in … seconds`, está lista (en la prueba, en menos de un segundo de arranque propio, más unos segundos de compilación). **Comprueba que `SQS_QUEUE_URL` no esté vacía:** si esa variable no existe en tu terminal, la API arranca igual, pero cada llamada falla con un 500 engañoso (`QueueDoesNotExistException`) porque pide una cola con nombre vacío. (Si usas otra terminal para el paso 6, tendrá que tener de nuevo el perfil `localstack` activo y la variable `TEST_QUEUE_URL`; si no, repite `export AWS_PROFILE=localstack` y vuelve a pedir la URL con `aws sqs get-queue-url --queue-name test-api-queue --query QueueUrl --output text`.)
+Cuando veas `Started SnsTestApiApplication in … seconds`, está lista. Para los pasos siguientes, la otra terminal necesita el perfil `localstack` activo (parte 3.1).
 
-**6. Llamar al endpoint y ver llegar el mensaje.** En otra terminal:
+**La primera línea del bloque comprueba que `TOPIC_ARN` sea un ARN válido** antes de arrancar. Es una protección contra un error engañoso: si esa variable no existe en tu terminal, la API arrancaría igual, pero cada llamada fallaría con un `500` y este mensaje en su log:
+```
+InvalidParameterException: Invalid parameter: TopicArn Reason: An ARN must have at least 6 elements, not 1
+```
+("un ARN tiene al menos 6 elementos, y esto tiene 1": un ARN real son seis partes separadas por `:`, y un valor vacío no tiene ninguna). Si ves `TOPIC_ARN no es un ARN válido`, la variable está vacía o el topic no existe. Para recuperarla:
 
 **bash**
 ```bash
-curl -i -X POST http://localhost:8081/api/test/sqs \
+TOPIC_ARN=$(aws sns list-topics --query "Topics[?contains(TopicArn,'report-events')].TopicArn | [0]" --output text)
+echo "$TOPIC_ARN"
+```
+**PowerShell**
+```powershell
+$TOPIC_ARN = aws sns list-topics --query "Topics[?contains(TopicArn,'report-events')].TopicArn | [0]" --output text
+$TOPIC_ARN
+```
+Si imprime `None`, el topic no existe: repite las partes 4 y 6 (LocalStack no guarda nada entre reinicios).
+
+**5. Publicar un mensaje por la API.** En otra terminal. Es el mensaje con la forma que esperan las Lambdas del proyecto (`type: report.requested`), con una marca única para reconocerlo:
+
+**bash**
+```bash
+MARK="api-$(date +%s)"
+curl -i -X POST http://localhost:8081/api/test/sns \
   -H "Content-Type: application/json" \
-  -d '{"hola":"desde spring"}'
-
-aws sqs receive-message --queue-url "$TEST_QUEUE_URL" --wait-time-seconds 3
+  -d "{\"type\":\"report.requested\",\"body\":{\"requestId\":\"$MARK\",\"requester\":\"yo@ejemplo.com\",\"reportType\":\"INVENTORY\"}}"
 ```
 **PowerShell**
 ```powershell
-'{"hola":"desde spring"}' | Set-Content -Encoding ascii body.json
-curl.exe -i -X POST http://localhost:8081/api/test/sqs `
+$MARK = "api-" + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+@{ type = "report.requested"; body = @{ requestId = $MARK; requester = "yo@ejemplo.com"; reportType = "INVENTORY" } } | ConvertTo-Json -Compress | Set-Content -Encoding ascii msg-api.json
+curl.exe -i -X POST http://localhost:8081/api/test/sns `
   -H "Content-Type: application/json" `
-  --data "@body.json"
+  --data "@msg-api.json"
+```
+La API responde `202 Accepted` con `{"messageId":"…","topicArn":"arn:aws:sns:us-east-2:000000000000:report-events"}`. Ese `messageId` es el que SNS asignó al mensaje.
 
-aws sqs receive-message --queue-url $TEST_QUEUE_URL --wait-time-seconds 3
-```
-Esta secuencia se probó contra LocalStack 3.8.1 con Spring Boot 4.1.1 y el SDK de AWS 2.29.52. Salida esperada:
-```
-HTTP/1.1 202
-Content-Type: application/json
-
-{"messageId":"8fc0a614-86df-41fa-8031-81f923562dde","queueUrl":"http://sqs.us-east-2.localhost.localstack.cloud:4566/000000000000/test-api-queue"}
-```
-y `receive-message`:
-```
-{"Messages": [{"MessageId": "8fc0a614-…", "Body": "{\"hola\":\"desde spring\"}", …}]}
-```
-Esa es la prueba de que el servidor llegó a LocalStack y escribió en la cola. Observa que el `messageId` de la respuesta de la API es el mismo que el de `receive-message`.
-
-Si quieres ver exactamente qué envía el SDK de AWS, arranca la API con `LOGGING_LEVEL_SOFTWARE_AMAZON_AWSSDK_REQUEST=DEBUG` (variable de entorno): el log mostrará `Sending Request: … host=localhost, port=4566` y `Received successful response: 200`.
-
-**7. Enviar al flujo real del proyecto.** Si en lugar de `test-api-queue` apuntas la API a `report-requests` (la cola de la parte 4, con su Lambda conectada), el mensaje dispara a `report-request-recorder`. Detén la API (Ctrl+C), arráncala de nuevo con `SQS_QUEUE_URL` igual a la URL de `report-requests` (en bash `"$REQUESTS_URL"`; en PowerShell `$REQUESTS_URL`), y envía un mensaje con la forma que esperan las Lambdas (el mismo de las partes 5 y 7):
-```
-{"type":"report.requested","body":{"requestId":"api-1","requester":"yo@ejemplo.com","requesterId":"s1","reportType":"INVENTORY","params":{},"requestedAt":"2026-01-01T00:00:00Z"}}
-```
-Ten presente que **este camino se salta SNS**: el mensaje va solo a esa cola, no a las dos. Las Lambdas aceptan el mensaje directo (sin el sobre de SNS), por eso funciona. Revisa el resultado en los logs de la Lambda (parte 7.3) o con `psql` (parte 7.3).
-
-**8. Limpiar.** Detén la API con Ctrl+C y borra la cola y el proyecto:
+**6. Comprobar que el mensaje recorrió todo el flujo.** SNS lo copió a las dos colas, y los triggers invocaron a las dos Lambdas. Busca tu marca en el log de cada una:
 
 **bash**
 ```bash
-aws sqs delete-queue --queue-url "$TEST_QUEUE_URL"
-cd .. && rm -rf sqs-test-api sqs-test-api.zip
+for FN in report-request-recorder report-generator; do
+  echo "--- $FN:"
+  for i in $(seq 1 12); do
+    aws logs filter-log-events --log-group-name /aws/lambda/$FN --query 'events[].message' --output text 2>/dev/null | tr '\t' '\n' | grep "$MARK" && break
+    sleep 5
+  done
+done
 ```
 **PowerShell**
 ```powershell
-aws sqs delete-queue --queue-url $TEST_QUEUE_URL
-cd ..; Remove-Item -Recurse -Force sqs-test-api, sqs-test-api.zip
+foreach ($fn in "report-request-recorder", "report-generator") {
+  "--- $fn`:"
+  for ($i = 0; $i -lt 12; $i++) {
+    $hit = (aws logs filter-log-events --log-group-name /aws/lambda/$fn --query 'events[].message' --output text 2>$null) -split "`t" | Select-String $MARK
+    if ($hit) { $hit; break }
+    Start-Sleep 5
+  }
+}
+```
+**Por qué se reintenta en vez de esperar un tiempo fijo:** el grupo de logs de una Lambda **no existe hasta su primera ejecución**, y esa primera ejecución en un LocalStack recién creado es un *arranque en frío* (LocalStack levanta el contenedor de la función) que puede tardar 10 a 30 segundos. Mientras tanto, `filter-log-events` falla con `The specified log group does not exist`. El bucle prueba cada 5 s, hasta 60 s, y se detiene al encontrar la marca; las siguientes ejecuciones son casi instantáneas.
+
+Cada Lambda debe imprimir una línea con tu marca (`[report-request-recorder] mensaje recibido: {"type":"report.requested","body":{"requestId":"api-…"…`). Si hiciste la 6.9, `report-generator` además publica el mensaje como aviso en tu app: míralo en `https://TU-APP/notices`, o con el comando opcional de 6.9, paso 5.
+
+**7. Ver el filtro en acción.** Publica un mensaje cuyo `type` **no** cumple el filtro de las suscripciones; SNS lo descarta y no llega a ninguna cola ni Lambda:
+
+**bash**
+```bash
+curl -i -X POST http://localhost:8081/api/test/sns \
+  -H "Content-Type: application/json" \
+  -d '{"type":"otro","body":{"nota":"este no debe llegar"}}'
+sleep 8
+aws logs filter-log-events --log-group-name /aws/lambda/report-generator --query 'events[].message' --output text | tr '\t' '\n' | grep -c "este no debe llegar"
+```
+**PowerShell**
+```powershell
+'{"type":"otro","body":{"nota":"este no debe llegar"}}' | Set-Content -Encoding ascii msg-otro-api.json
+curl.exe -i -X POST http://localhost:8081/api/test/sns -H "Content-Type: application/json" --data "@msg-otro-api.json"
+Start-Sleep 8
+((aws logs filter-log-events --log-group-name /aws/lambda/report-generator --query 'events[].message' --output text) -split "`t" | Select-String "este no debe llegar" | Measure-Object).Count
+```
+La API responde igual `202` (publicar en SNS siempre funciona), pero el conteo final es `0`: ninguna Lambda recibió el mensaje. (Ese `0` solo significa algo porque en el paso 6 las dos Lambdas ya corrieron y sus logs existen: con un grupo de logs inexistente, el conteo también daría `0`, pero acompañado de un error.) Esa es la diferencia con enviar directo a una cola: SNS decide a quién le llega cada mensaje.
+
+**8. Limpiar.** Detén la API con Ctrl+C y borra el proyecto:
+
+**bash**
+```bash
+cd .. && rm -rf sns-test-api sns-test-api.zip
+```
+**PowerShell**
+```powershell
+cd ..; Remove-Item -Recurse -Force sns-test-api, sns-test-api.zip
 ```
 
 **Para AWS real, esta API cambiaría así** (el código no):
 - **Se quitan** `AWS_ENDPOINT_URL` y las claves `test`: el servidor usa el rol de la instancia EC2.
-- **`SQS_QUEUE_URL`** pasa a ser la URL real de la cola (`aws sqs get-queue-url --queue-name <cola>`).
-- **El rol necesita permiso** `sqs:SendMessage` sobre esa cola (como el `sns:Publish` de la parte 9.3).
-- **El endpoint no puede quedar abierto:** en un servidor real iría detrás de autenticación (Cognito en el BFF del proyecto). Esta versión es solo un banco de pruebas.
-- Si prefieres publicar en **SNS** (como hace el BFF) en vez de enviar a una cola, se cambia `SqsClient` por `SnsClient` (módulo `sns`) y `sendMessage` por `publish` con el `TopicArn`: así el mensaje llega a las dos colas con su filtro.
+- **`SNS_TOPIC_ARN`** pasa a ser el ARN real del topic (`aws sns list-topics`, o el valor que devolvió `create-topic`).
+- **El rol necesita permiso** `sns:Publish` sobre ese topic (parte 9.3): es exactamente el permiso que ya usa el BFF del proyecto.
+- **El endpoint no puede quedar abierto:** en un servidor real iría detrás de autenticación (Cognito en el BFF del proyecto), y el mensaje no lo armaría quien llama, sino el servidor a partir del JWT: así el BFF decide quién es el `requester`.
 
 ---
 
@@ -1545,7 +1618,10 @@ aws sns delete-topic --topic-arn <TOPIC_ARN>
 | (código real, 6.8) La Lambda falla con `ECONNREFUSED` al conectarse a Postgres (local) | Usa `localhost`, que dentro del contenedor es él mismo | `host.docker.internal` en `DATABASE_URL` |
 | (código real, 6.8) La Lambda falla con `no pg_hba.conf entry` o por SSL (local) | Postgres local no usa SSL | `DATABASE_SSL=false` |
 | (código real, 6.8) `relation "report_requests" does not exist` | La tabla aún no existe | Crearla con el SQL de `GUIA.md` (parte 1), o arrancar el BFF |
-| La API Spring Boot responde `500` y su log dice `QueueDoesNotExistException` | `SQS_QUEUE_URL` está vacía (la variable `TEST_QUEUE_URL` no existía en esa terminal) o apunta a una cola borrada | Definir la variable en esa terminal (`aws sqs get-queue-url --queue-name test-api-queue --query QueueUrl --output text`) y reiniciar la API |
+| Gradle (8.1) falla con `Could not resolve …` / `Could not GET …` (red corporativa, Windows) | La red no alcanza Maven Central (o el Gradle Plugin Portal) | Usar el espejo de Maven Central (nota del paso 1 de 8.1) |
+| Gradle (8.1) falla con `No matching toolchains found for requested specification` | El JDK instalado no es el que pide `build.gradle` | Alinear `languageVersion` con `java --version` (nota del paso 1 de 8.1) |
+| La API Spring Boot (8.1) responde `500` y su log dice `Invalid parameter: TopicArn Reason: An ARN must have at least 6 elements, not 1` | `SNS_TOPIC_ARN` llegó **vacía**: la variable `TOPIC_ARN` no existía en la terminal donde arrancaste la API, o el topic no existe (LocalStack se reinició) | Recuperar la variable con `aws sns list-topics …` (8.1, paso 4), o repetir las partes 4 y 6 si no existe; reiniciar la API en esa misma terminal |
+| La API (8.1) responde `202` pero ninguna Lambda imprime el mensaje | El `type` del mensaje no es `report.requested` (el filtro lo descartó), o faltan los triggers | Revisar el cuerpo enviado (paso 5) y `list-event-source-mappings` (6.5) |
 | El mensaje reaparece en la cola una y otra vez | La Lambda lanza un error | `aws logs tail` y corregir; tras 3 intentos va a la DLQ |
 | `sqs receive-message` devuelve vacío tras publicar | Aún no llegó, o ya lo consumió una Lambda | Prueba antes de crear los mapeos (parte 5) |
 | **Windows (Git Bash):** `--log-group-name` falla con una ruta `C:/Program Files/Git/…` | Git Bash convierte argumentos que empiezan con `/` | `export MSYS_NO_PATHCONV=1` |
