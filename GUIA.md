@@ -1,6 +1,8 @@
-# Guía: arquitectura de informes y entorno local
+# Guía: arquitectura de informes y despliegue en AWS
 
-Cómo replicar a mano todo lo que se construyó: la arquitectura en AWS, los cambios de código en cada repositorio y el entorno local para programar sin depender de la nube.
+Cómo replicar a mano todo lo que se construyó: la arquitectura en AWS, los cambios de código en cada repositorio y los secrets y el orden de despliegue.
+
+> **Paso 1 de todo: el entorno local.** Antes de tocar AWS, construye y prueba el sistema completo en tu máquina con **[GUIA-LOCAL-PASO-A-PASO.md](GUIA-LOCAL-PASO-A-PASO.md)** (LocalStack + Postgres con Docker Compose, el servicio de avisos, las Lambdas, SNS/SQS y los triggers, comando por comando, en Mac, Linux y Windows). Esta guía empieza donde esa termina: la arquitectura, el código de cada repo y el paso a AWS real.
 
 Los identificadores van como marcadores (`<ACCOUNT_ID>`, `<EC2_IP>`, `TU-APP`…): sustitúyelos por los tuyos. Región: `us-east-2`.
 
@@ -23,7 +25,7 @@ El repo **#1 es el punto de entrada**: contiene las instrucciones y las herramie
 3. [Infraestructura en AWS (a mano)](#3-infraestructura-en-aws-a-mano)
 4. [Cambios de código por repositorio](#4-cambios-de-código-por-repositorio)
 5. [Secrets y orden de despliegue](#5-secrets-y-orden-de-despliegue)
-6. [Entorno local (programar sin la nube)](#6-entorno-local-programar-sin-la-nube)
+6. [Entorno local](#6-entorno-local)
 7. [Probar la API de avisos](#7-probar-la-api-de-avisos)
 8. [Problemas frecuentes](#8-problemas-frecuentes)
 9. [Lista de verificación final](#9-lista-de-verificación-final)
@@ -35,10 +37,9 @@ El repo **#1 es el punto de entrada**: contiene las instrucciones y las herramie
 | Objetivo | Ve a |
 |---|---|
 | Entender qué hace el sistema | 1 |
-| Montar el proyecto en una máquina nueva | 2, luego 6 |
-| Programar y probar sin tocar AWS | 6 |
-| **Construir todo a mano, en orden, entendiendo cada comando (recomendada)** | [GUIA-LOCAL-PASO-A-PASO.md](GUIA-LOCAL-PASO-A-PASO.md) |
-| Referencia extensa de LocalStack y de AWS real | [GUIA-LOCALSTACK-MANUAL.md](GUIA-LOCALSTACK-MANUAL.md) |
+| **Paso 1: construir y probar todo en local, comando por comando** | [GUIA-LOCAL-PASO-A-PASO.md](GUIA-LOCAL-PASO-A-PASO.md) |
+| Montar el proyecto en una máquina nueva | 2 |
+| Programar el BFF y el front contra el entorno local | 6 |
 | Recrear la infraestructura en una cuenta de AWS | 3, 4 y 5 |
 | Algo no funciona | 8 |
 
@@ -114,7 +115,7 @@ En AWS la crea el BFF al arrancar (`ddl-auto=update`, entidad `ReportRequest`). 
 |---|---|---|
 | Node ≥ 20.12 | scripts, front y Lambdas | `node --version` |
 | Java 21 | BFF | `java --version` |
-| Docker (Docker Desktop en Mac/Windows) | LocalStack, entorno local | `docker --version` |
+| Docker (Docker Desktop en Mac/Windows) | Entorno local (paso 1) | `docker --version` |
 | Un Postgres | Supabase en la nube; uno local para pruebas | `psql --version` (opcional) |
 | AWS CLI v2 con credenciales | solo para la parte 3 (crear en AWS) | `aws sts get-caller-identity` |
 | `gh` (GitHub CLI) | opcional | `gh --version` |
@@ -150,14 +151,13 @@ El formato es `git clone <url> <carpeta>`. Resultado:
 ```bash
 cd AWS
 npm install                          # dependencias de los scripts de la raíz
-cp local/.env.example local/.env     # PowerShell: Copy-Item local/.env.example local/.env
 ```
-Edita `local/.env` (ver [parte 6](#6-entorno-local-programar-sin-la-nube)). Ese archivo y el `.env` de la raíz están ignorados por git: ahí van las credenciales, nunca en un commit.
+Los archivos `.env` (el de la raíz y `local/.env`) están ignorados por git: ahí van las credenciales, nunca en un commit. El entorno local se arma con la [guía del paso 1](GUIA-LOCAL-PASO-A-PASO.md).
 
 ---
 
 ## 3. Infraestructura en AWS (a mano)
-Los comandos son bash. En Windows, usa WSL o Git Bash, o consulta la **versión PowerShell de cada comando** en [GUIA-LOCALSTACK-MANUAL.md](GUIA-LOCALSTACK-MANUAL.md#mac-linux-y-windows-cómo-leer-esta-guía).
+Los comandos son bash. En Windows, usa WSL o Git Bash, o consulta la **versión PowerShell de los mismos comandos** en [GUIA-LOCAL-PASO-A-PASO.md](GUIA-LOCAL-PASO-A-PASO.md#1-requisitos-y-cómo-leer-la-guía) (secciones 6, 7 y 9), que usan los mismos recursos.
 
 ### 3.1 Variables
 ```bash
@@ -353,73 +353,11 @@ Para ver el estado de un despliegue: `gh run list --repo docentedev/<repo> --lim
 
 ---
 
-## 6. Entorno local (programar sin la nube)
+## 6. Entorno local
 
-Emula SNS, SQS y Lambda con LocalStack, y reemplaza Cognito por un OIDC falso. La base es la que indiques; un Postgres local es lo recomendado.
+El entorno local (LocalStack, Postgres, el servicio de avisos, las Lambdas, SNS/SQS y los triggers) se construye a mano en **[GUIA-LOCAL-PASO-A-PASO.md](GUIA-LOCAL-PASO-A-PASO.md)**: es el paso 1 y no se repite aquí.
 
-### 6.1 Vía automática (Mac, Linux y Windows)
-Desde la raíz del proyecto, tras `npm install` y `cp local/.env.example local/.env`:
-```bash
-# en local/.env:  DATABASE_URL=postgresql://USUARIO@localhost:5432/reports_local   y   DATABASE_SSL=false
-createdb reports_local               # o créala con tu cliente de Postgres
-npm run db:check                     # valida la conexión
-npm run local:up                     # levanta LocalStack (Docker abierto)
-npm run local:init                   # crea topic, colas, DLQs, suscripciones y Lambdas
-npm run local:dev                    # OIDC falso + BFF + front; Ctrl+C detiene todo
-```
-Abre http://localhost:5173 y pulsa "Ingresar con Cognito": entra solo como `admin@local.test` con el grupo `Admin`.
-
-| Comando | Qué hace |
-|---|---|
-| `npm run local:up` / `local:down` | Enciende / apaga LocalStack |
-| `npm run local:init` | Crea los recursos y las Lambdas (repetible; si reinicias Docker hay que repetirlo) |
-| `npm run local:dev` | OIDC falso + BFF + front |
-| `npm run local:send-test` | Publica una solicitud y muestra los logs de las dos Lambdas |
-| `npm run local:oidc` | Solo el OIDC falso |
-| `npm run db:check` | Valida una credencial de Postgres/Supabase |
-| `npm run db:schema` | Crea `report_requests` en la base de `DATABASE_URL` |
-| `npm run notify:test` | Prueba la API de avisos (ver [parte 7](#7-probar-la-api-de-avisos)) |
-
-En local, el aviso del informe **solo se imprime** en el log del generador (`NOTIFY_MODE=log`); no llama a la API real salvo que definas `API_NOTIFICATION` y `API_TOKEN_INTEGRATION` en `local/.env`. Detalle en `local/README.md`.
-
-### 6.2 Vía manual (qué hace cada pieza)
-> Para construir todo **comando por comando** (SNS, SQS, Lambdas, triggers), entender cómo el CLI elige entre LocalStack y AWS real, invocar una Lambda a mano y pasar a producción, usa la guía dedicada: **[GUIA-LOCALSTACK-MANUAL.md](GUIA-LOCALSTACK-MANUAL.md)**. Lo que sigue es solo un resumen.
-
-**a) LocalStack** (`local/docker-compose.yml`): imagen `localstack/localstack:3.8.1` (las recientes pueden exigir token), servicios `sns,sqs,lambda,logs,iam,sts`, puerto `127.0.0.1:4566`, montando `/var/run/docker.sock` y con `LAMBDA_DOCKER_FLAGS=--add-host=host.docker.internal:host-gateway`.
-```bash
-docker compose -f local/docker-compose.yml up -d
-```
-
-**b) Recursos:** son los mismos comandos de las partes 3.2 a 3.5, con estas diferencias:
-```bash
-export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_DEFAULT_REGION=us-east-2
-alias awsl='aws --endpoint-url http://localhost:4566'   # usa awsl en lugar de aws
-```
-- Cuenta `000000000000`. El rol de las Lambdas puede ser ficticio (`arn:aws:iam::000000000000:role/lambda-role`), sin crear IAM ni la política de las colas.
-- Runtime `nodejs20.x`.
-- `DATABASE_URL` de las Lambdas con `localhost` reemplazado por `host.docker.internal`, y `DATABASE_SSL=false`.
-- En el generator, `NOTIFY_MODE=log` para que no llame a la API real.
-- Al recrear una Lambda, **borra antes sus event source mappings** (`awsl lambda list-event-source-mappings --event-source-arn <cola>` → `delete-event-source-mapping`); si no, LocalStack responde `ResourceConflictException`.
-
-**c) OIDC falso:** `node scripts/local/mock-oidc.js` (paquete `oauth2-mock-server`). Escucha en `127.0.0.1:9000`, inicia sesión automáticamente y firma tokens con `email`, `sub`, `cognito:username` y `cognito:groups`. Variables: `MOCK_EMAIL`, `MOCK_SUB`, `MOCK_GROUPS` (p. ej. `Colaborador` para probar el 403) y `MOCK_PORT`.
-
-**d) BFF** apuntando a todo lo local, por variables de entorno:
-```bash
-cd bff
-SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI=http://localhost:9000 \
-AWS_ENDPOINT_URL=http://localhost:4566 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_REGION=us-east-2 \
-SNS_TOPIC_ARN=arn:aws:sns:us-east-2:000000000000:report-events \
-DB_URL=jdbc:postgresql://localhost:5432/reports_local DB_USER=USUARIO DB_PASSWORD= \
-./gradlew bootRun          # Windows: gradlew.bat bootRun, y las variables con $env:NOMBRE='valor'
-```
-`AWS_ENDPOINT_URL` lo respeta el SDK de AWS v2 sin cambiar código.
-
-**e) Front:** `cd front && npm install && npm run dev` (lee `.env.development.local`, ver 4.3).
-
-**f) Probar:** abre http://localhost:5173, entra y pulsa el botón; luego
-```bash
-psql reports_local -P pager=off -c "SELECT id, requester, type, requested_at FROM report_requests ORDER BY requested_at DESC LIMIT 3;"
-```
+Para **programar el BFF y el front contra un entorno local** (con un OIDC falso en lugar de Cognito, un solo comando `npm run local:dev`), el repositorio trae un atajo con scripts de Node, documentado en [local/README.md](local/README.md).
 
 ---
 
@@ -450,10 +388,7 @@ Código de salida: `0` aceptado, `1` rechazado o sin respuesta, `2` falta config
 
 | Síntoma | Causa | Solución |
 |---|---|---|
-| BFF local responde 401 con `Bearer resource_metadata=…` y sin `error=` | El BFF no alcanza el OIDC falso: Node enlazó `localhost` solo a `::1` y el Java del BFF fuerza IPv4 | Enlazar el OIDC a `127.0.0.1` (ya hecho) |
-| 401 `no matching key(s) found` tras reiniciar el OIDC | El OIDC regenera sus claves al arrancar; el navegador conserva un token firmado con las anteriores | Cerrar sesión y volver a entrar |
-| `ResourceConflictException` al repetir `local:init` | LocalStack no borra el *event source mapping* al borrar la función | El script ya lo limpia; si lo haces a mano, borra los mapeos antes |
-| El recorder falla con `relation "report_requests" does not exist` | El BFF nuevo aún no arrancó contra esa base | Desplegar el BFF, o ejecutar el SQL de la parte 1 (`npm run db:schema` en local) |
+| El recorder falla con `relation "report_requests" does not exist` | El BFF nuevo aún no arrancó contra esa base | Desplegar el BFF, o crear la tabla con el SQL de la parte 1 |
 | 503 del API Gateway tras desplegar el BFF | El contenedor tarda en arrancar | Esperar y repetir `GET /health` |
 | Los mensajes de informe no llegan a las colas | El filtro de la suscripción no incluye el `type` publicado | Revisar `FilterPolicy` y que el scope sea `MessageBody` |
 | El aviso no llega y el log del generador dice `HTTP 405 … nginx` con una página HTML | La petición iba a `/saas/notices` en vez de `/api/saas/notices`: el nginx del sitio no acepta el POST | Ya corregido en el código. `API_NOTIFICATION` basta con la URL del sitio; se prueba con `npm run notify:test` |
@@ -464,7 +399,6 @@ Código de salida: `0` aceptado, `1` rechazado o sin respuesta, `2` falta config
 | `git commit` falla al firmar | Firma GPG activa y no accesible desde un entorno restringido | Hacer el commit desde tu propia terminal |
 | `gh secret` da 403 | `gh` está autenticado con otra cuenta | `gh auth login --hostname github.com --git-protocol https --web` con la cuenta dueña del repo, o crear los secrets desde la web |
 | `gh run list` abre un paginador y se queda en `(END)` | `gh` usa `less` | Pulsa `q`, o agrega `\| cat` |
-| La Lambda local no alcanza tu Postgres | Dentro del contenedor `localhost` es el propio contenedor | Usar `host.docker.internal` (el script ya lo hace) |
 
 ---
 
@@ -502,5 +436,5 @@ Código de salida: `0` aceptado, `1` rechazado o sin respuesta, `2` falta config
 - **Raw message delivery:** opción de SNS que entrega el mensaje tal cual. Desactivada, SQS recibe además un sobre `{Type, Message, …}`.
 - **OIDC / JWT:** estándar de inicio de sesión y token firmado que prueba quién eres y a qué grupos perteneces (aquí, `cognito:groups`).
 - **BFF (Backend for Frontend):** servidor intermedio entre el front y los datos o servicios; aquí es el Spring Boot.
-- **LocalStack:** emulador local de servicios de AWS (SNS, SQS, Lambda…).
+- **LocalStack:** emulador local de servicios de AWS (SNS, SQS, Lambda…); ver el [paso 1](GUIA-LOCAL-PASO-A-PASO.md).
 - **Idempotente:** una operación que se puede repetir sin cambiar el resultado (un reintento no duplica la fila).

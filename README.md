@@ -1,7 +1,7 @@
 # Documentación AWS — cuenta 258344940817
 
 Última actualización: **2026-10-13**. Credenciales CLI: perfil `default`, identidad **root** (ver recomendaciones).
-Variables de entorno y secrets: [ENV.md](ENV.md). Comandos: [comandos.md](comandos.md). Guía paso a paso para replicarlo todo: [GUIA.md](GUIA.md). **Guía recomendada, en orden y probada: [GUIA-LOCAL-PASO-A-PASO.md](GUIA-LOCAL-PASO-A-PASO.md)** (LocalStack + Postgres con Docker Compose, servicio de avisos Spring Boot, Lambdas, SNS/SQS/triggers, paso a AWS real). Referencia más extensa: guía para construir SNS, SQS y las Lambdas a mano en LocalStack y llevarlos a AWS real, sin scripts: [GUIA-LOCALSTACK-MANUAL.md](GUIA-LOCALSTACK-MANUAL.md). Stack local y comandos `npm run …`: [local/README.md](local/README.md).
+Variables de entorno y secrets: [ENV.md](ENV.md). Comandos: [comandos.md](comandos.md). Guía paso a paso para replicarlo todo: [GUIA.md](GUIA.md). **Paso 1: construir y probar todo en local, comando por comando (LocalStack + Postgres con Docker Compose, servicio de avisos, Lambdas, SNS/SQS, paso a AWS real): [GUIA-LOCAL-PASO-A-PASO.md](GUIA-LOCAL-PASO-A-PASO.md).** Después, arquitectura, código por repositorio y despliegue en AWS: [GUIA.md](GUIA.md). Variables y secrets: [ENV.md](ENV.md). Comandos: [comandos.md](comandos.md). Atajo con `npm run …` para programar el BFF y el front en local: [local/README.md](local/README.md).
 
 ## Estructura de este directorio
 

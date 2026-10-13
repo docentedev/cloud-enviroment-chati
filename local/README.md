@@ -1,4 +1,6 @@
-# Stack local de informes
+# Atajo local con `npm run …` (BFF + front)
+
+> **El entorno local de referencia se construye a mano en [GUIA-LOCAL-PASO-A-PASO.md](../GUIA-LOCAL-PASO-A-PASO.md)** (paso 1). Este documento es solo un atajo opcional con scripts de Node para **programar el BFF y el front** contra LocalStack, con un OIDC falso en lugar de Cognito.
 
 Funciona igual en **Mac, Linux y Windows**: todos los comandos son Node (`npm run …` desde la raíz del proyecto).
 Emula SNS, SQS y Lambda con LocalStack; la base de datos es la que indiques en `local/.env`.

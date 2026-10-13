@@ -11,7 +11,7 @@ Esta guía construye **todo a mano**, en orden, con cada comando explicado. Sirv
                   │  (filtro por el campo "type" del mensaje)
                   ├─► SQS report-requests   ──► Lambda 1 "report-request-recorder" ──► Postgres (tabla report_requests)
                   │        └─ DLQ                  guarda la solicitud
-                  └─► SQS report-generation ──► Lambda 2 "report-generator"        ──► API /api/notice (Spring Boot)
+                  └─► SQS report-generation ──► Lambda 2 "report-generator"        ──► API /api/saas/notices (Spring Boot)
                            └─ DLQ                  lee los 10 productos más caros de Postgres y publica el aviso
 ```
 
@@ -19,13 +19,13 @@ Esta guía construye **todo a mano**, en orden, con cada comando explicado. Sirv
 |---|---|---|
 | SNS, SQS, Lambda | LocalStack (Docker) | AWS |
 | Postgres | contenedor Postgres (Docker) | Supabase |
-| Servicio de avisos `/api/notice` | proyecto Spring Boot en tu máquina | `https://api.claudioviajando.com/api/notice` |
+| Servicio de avisos `/api/saas/notices` | proyecto Spring Boot en tu máquina | `https://app.claudioviajando.com/api/saas/notices` |
 
 **Índice**
 1. [Requisitos y cómo leer la guía](#1-requisitos-y-cómo-leer-la-guía)
 2. [Docker Compose: LocalStack y Postgres](#2-docker-compose-localstack-y-postgres)
 3. [Configurar el CLI hacia LocalStack](#3-configurar-el-cli-hacia-localstack)
-4. [El servicio de avisos: proyecto Spring Boot con `/api/notice`](#4-el-servicio-de-avisos-proyecto-spring-boot-con-apinotice)
+4. [El servicio de avisos: proyecto Spring Boot con `/api/saas/notices`](#4-el-servicio-de-avisos-proyecto-spring-boot-con-apisaasnotices)
 5. [Escribir las dos Lambdas](#5-escribir-las-dos-lambdas)
 6. [Desplegar las Lambdas](#6-desplegar-las-lambdas)
 7. [SNS, SQS, filtros y triggers](#7-sns-sqs-filtros-y-triggers)
@@ -339,12 +339,12 @@ $ACCOUNT_ID
 
 ---
 
-## 4. El servicio de avisos: proyecto Spring Boot con `/api/notice`
+## 4. El servicio de avisos: proyecto Spring Boot con `/api/saas/notices`
 
-En el sistema real, la Lambda 2 publica el aviso en `https://api.claudioviajando.com/api/notice`. En local ese servicio no existe, así que lo **simulamos con un proyecto Spring Boot mínimo** que expone el mismo endpoint:
+En el sistema real, la Lambda 2 publica el aviso en `https://app.claudioviajando.com/api/saas/notices` (verificado con la clave real: responde `201`). En local ese servicio no existe, así que lo **simulamos con un proyecto Spring Boot mínimo** que expone el mismo endpoint:
 
-- `POST /api/notice` recibe `{"text": "..."}` y responde `201`. Si arrancas el servicio con `NOTICE_API_KEY`, exige la cabecera `Authorization: ApiKey <clave>`, como el real.
-- `GET /api/notice` lista los avisos recibidos, para que veas qué llegó.
+- `POST /api/saas/notices` recibe `{"text": "..."}` y responde `201`. Si arrancas el servicio con `NOTICE_API_KEY`, exige la cabecera `Authorization: ApiKey <clave>`, como el real.
+- `GET /api/saas/notices` lista los avisos recibidos, para que veas qué llegó.
 
 **1. Generar el proyecto** con Spring Initializr (la herramienta oficial de Spring), desde la línea de comandos:
 
@@ -410,7 +410,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/notice")
+@RequestMapping({"/api/saas/notices", "/api/notice"})
 public class NoticeController {
 
     public record NoticeRequest(String text) {}
@@ -475,7 +475,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/notice")
+@RequestMapping({"/api/saas/notices", "/api/notice"})
 public class NoticeController {
 
     public record NoticeRequest(String text) {}
@@ -520,7 +520,7 @@ notice.api-key=${NOTICE_API_KEY:}
 '@ | Set-Content -Encoding ascii notice-api/src/main/resources/application.properties
 ```
 Qué hace el código:
-- **`@RestController` + `@RequestMapping("/api/notice")`**: la clase atiende las rutas que empiezan con `/api/notice`.
+- **`@RestController` + `@RequestMapping({…})`**: la clase atiende `/api/saas/notices` (la ruta del servicio real) y, además, `/api/notice` como alias.
 - **`@PostMapping`**: recibe el JSON `{"text": …}` (Spring lo convierte al `record NoticeRequest`), valida la clave y el texto, guarda el aviso en una lista **en memoria** (se pierde al apagar) y responde `201` con el aviso creado.
 - **`@GetMapping`**: devuelve la lista, para inspeccionar.
 - **`notice.api-key=${NOTICE_API_KEY:}`**: la clave sale de la variable de entorno `NOTICE_API_KEY`; si no existe, queda vacía y no se exige nada.
@@ -547,25 +547,25 @@ $env:NOTICE_API_KEY = "clave-local"
 
 **bash**
 ```bash
-curl -s -o /dev/null -w "sin clave -> HTTP %{http_code}\n" -X POST http://localhost:8082/api/notice \
+curl -s -o /dev/null -w "sin clave -> HTTP %{http_code}\n" -X POST http://localhost:8082/api/saas/notices \
   -H "Content-Type: application/json" -d '{"text":"prueba"}'
 
-curl -s -w "\ncon clave -> HTTP %{http_code}\n" -X POST http://localhost:8082/api/notice \
+curl -s -w "\ncon clave -> HTTP %{http_code}\n" -X POST http://localhost:8082/api/saas/notices \
   -H "Authorization: ApiKey clave-local" -H "Content-Type: application/json" -d '{"text":"prueba"}'
 
-curl -s http://localhost:8082/api/notice
+curl -s http://localhost:8082/api/saas/notices
 ```
 **PowerShell**
 ```powershell
 '{"text":"prueba"}' | Set-Content -Encoding ascii notice-test.json
 
-curl.exe -s -o NUL -w "sin clave -> HTTP %{http_code}\n" -X POST http://localhost:8082/api/notice `
+curl.exe -s -o NUL -w "sin clave -> HTTP %{http_code}\n" -X POST http://localhost:8082/api/saas/notices `
   -H "Content-Type: application/json" --data "@notice-test.json"
 
-curl.exe -s -w "\ncon clave -> HTTP %{http_code}\n" -X POST http://localhost:8082/api/notice `
+curl.exe -s -w "\ncon clave -> HTTP %{http_code}\n" -X POST http://localhost:8082/api/saas/notices `
   -H "Authorization: ApiKey clave-local" -H "Content-Type: application/json" --data "@notice-test.json"
 
-curl.exe -s http://localhost:8082/api/notice
+curl.exe -s http://localhost:8082/api/saas/notices
 ```
 - `-X POST`: método HTTP. `-H`: cabecera. `-d`: cuerpo (en PowerShell, `--data "@archivo"` lee el cuerpo de un archivo).
 - `-o /dev/null -w "…%{http_code}"`: descarta el cuerpo y muestra solo el código HTTP (`-o NUL` en Windows).
@@ -863,7 +863,7 @@ cat > env-recorder.json <<'EOF'
 {"Variables":{"DATABASE_URL":"postgresql://app:app@postgres:5432/reports","DATABASE_SSL":"false"}}
 EOF
 cat > env-generator.json <<'EOF'
-{"Variables":{"DATABASE_URL":"postgresql://app:app@postgres:5432/reports","DATABASE_SSL":"false","NOTICE_URL":"http://host.docker.internal:8082/api/notice","NOTICE_API_KEY":"clave-local"}}
+{"Variables":{"DATABASE_URL":"postgresql://app:app@postgres:5432/reports","DATABASE_SSL":"false","NOTICE_URL":"http://host.docker.internal:8082/api/saas/notices","NOTICE_API_KEY":"clave-local"}}
 EOF
 ```
 **PowerShell**
@@ -874,7 +874,7 @@ $ROLE_ARN = "arn:aws:iam::${ACCOUNT_ID}:role/lambda-role"
 {"Variables":{"DATABASE_URL":"postgresql://app:app@postgres:5432/reports","DATABASE_SSL":"false"}}
 '@ | Set-Content -Encoding ascii env-recorder.json
 @'
-{"Variables":{"DATABASE_URL":"postgresql://app:app@postgres:5432/reports","DATABASE_SSL":"false","NOTICE_URL":"http://host.docker.internal:8082/api/notice","NOTICE_API_KEY":"clave-local"}}
+{"Variables":{"DATABASE_URL":"postgresql://app:app@postgres:5432/reports","DATABASE_SSL":"false","NOTICE_URL":"http://host.docker.internal:8082/api/saas/notices","NOTICE_API_KEY":"clave-local"}}
 '@ | Set-Content -Encoding ascii env-generator.json
 ```
 - **`DATABASE_URL`**: `postgresql://usuario:clave@servidor:puerto/base`. `postgres` es el nombre del servicio del compose (resuelve gracias a `LAMBDA_DOCKER_NETWORK`); el puerto es el **interno**, 5432.
@@ -1178,9 +1178,9 @@ docker compose exec -T postgres psql -U app -d reports -c "SELECT id, requester,
 
 echo "--- Servicio de avisos (Lambda 2):"
 for i in $(seq 1 12); do
-  curl -s http://localhost:8082/api/notice | grep -q "$MARK" && break; sleep 5
+  curl -s http://localhost:8082/api/saas/notices | grep -q "$MARK" && break; sleep 5
 done
-curl -s http://localhost:8082/api/notice | grep -o "Informe top-products ($MARK)[^\"]*" | head -c 300; echo
+curl -s http://localhost:8082/api/saas/notices | grep -o "Informe top-products ($MARK)[^\"]*" | head -c 300; echo
 ```
 **PowerShell**
 ```powershell
@@ -1193,9 +1193,9 @@ docker compose exec -T postgres psql -U app -d reports -c "SELECT id, requester,
 
 "--- Servicio de avisos (Lambda 2):"
 for ($i = 0; $i -lt 12; $i++) {
-  if ((curl.exe -s http://localhost:8082/api/notice) -match $MARK) { break }; Start-Sleep 5
+  if ((curl.exe -s http://localhost:8082/api/saas/notices) -match $MARK) { break }; Start-Sleep 5
 }
-(curl.exe -s http://localhost:8082/api/notice) -split '"' | Select-String $MARK | Select-Object -First 1
+(curl.exe -s http://localhost:8082/api/saas/notices) -split '"' | Select-String $MARK | Select-Object -First 1
 ```
 - Esperado: **una fila** en `report_requests` con tu `MARK`, y el aviso `Informe top-products (demo-…) solicitado por claudio@ejemplo.com. Los 10 productos más caros: 1. Notebook Pro 16 …` (también impreso como `AVISO RECIBIDO` en la terminal B).
 - Dos Lambdas distintas, dos colas distintas, un solo mensaje publicado: eso es el *fan-out*.
@@ -1211,9 +1211,9 @@ EOF
 aws sns publish --topic-arn "$TOPIC_ARN" --message file://msg-regenerate.json --query MessageId --output text
 
 for i in $(seq 1 12); do
-  curl -s http://localhost:8082/api/notice | grep -q "$MARK2" && break; sleep 5
+  curl -s http://localhost:8082/api/saas/notices | grep -q "$MARK2" && break; sleep 5
 done
-echo -n "avisos con $MARK2: "; curl -s http://localhost:8082/api/notice | grep -c "$MARK2"
+echo -n "avisos con $MARK2: "; curl -s http://localhost:8082/api/saas/notices | grep -c "$MARK2"
 echo -n "filas en Postgres con $MARK2 (debe ser 0): "
 docker compose exec -T postgres psql -U app -d reports -t -A -c "SELECT count(*) FROM report_requests WHERE id='$MARK2'"
 ```
@@ -1227,9 +1227,9 @@ $now = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 aws sns publish --topic-arn $TOPIC_ARN --message file://msg-regenerate.json --query MessageId --output text
 
 for ($i = 0; $i -lt 12; $i++) {
-  if ((curl.exe -s http://localhost:8082/api/notice) -match $MARK2) { break }; Start-Sleep 5
+  if ((curl.exe -s http://localhost:8082/api/saas/notices) -match $MARK2) { break }; Start-Sleep 5
 }
-"aviso con ${MARK2}: " + (((curl.exe -s http://localhost:8082/api/notice) -match $MARK2))
+"aviso con ${MARK2}: " + (((curl.exe -s http://localhost:8082/api/saas/notices) -match $MARK2))
 "filas en Postgres con $MARK2 (debe ser 0): " + (docker compose exec -T postgres psql -U app -d reports -t -A -c "SELECT count(*) FROM report_requests WHERE id='$MARK2'")
 ```
 Esperado: **1 aviso** y **0 filas**: el filtro de la cola `report-requests` dejó fuera este tipo, y solo `report-generation` lo recibió.
@@ -1243,7 +1243,7 @@ aws sns publish --topic-arn "$TOPIC_ARN" \
   --message "{\"type\":\"otro\",\"body\":{\"requestId\":\"$MARK3\",\"requester\":\"x\",\"reportType\":\"x\"}}" \
   --query MessageId --output text
 sleep 15
-echo -n "avisos con $MARK3 (debe ser 0): "; curl -s http://localhost:8082/api/notice | grep -c "$MARK3"
+echo -n "avisos con $MARK3 (debe ser 0): "; curl -s http://localhost:8082/api/saas/notices | grep -c "$MARK3"
 for Q in report-requests report-generation; do
   echo -n "mensajes pendientes en $Q (debe ser 0): "
   aws sqs get-queue-attributes --queue-url "$(aws sqs get-queue-url --queue-name $Q --query QueueUrl --output text)" \
@@ -1258,7 +1258,7 @@ $MARK3 = "otro-" + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 "@ | Set-Content -Encoding ascii msg-otro.json
 aws sns publish --topic-arn $TOPIC_ARN --message file://msg-otro.json --query MessageId --output text
 Start-Sleep 15
-"avisos con $MARK3 (debe ser 0): " + (((curl.exe -s http://localhost:8082/api/notice) -split $MARK3).Count - 1)
+"avisos con $MARK3 (debe ser 0): " + (((curl.exe -s http://localhost:8082/api/saas/notices) -split $MARK3).Count - 1)
 foreach ($q in "report-requests", "report-generation") {
   $u = aws sqs get-queue-url --queue-name $q --query QueueUrl --output text
   "mensajes pendientes en ${q} (debe ser 0): " + (aws sqs get-queue-attributes --queue-url $u --attribute-names ApproximateNumberOfMessages --query Attributes.ApproximateNumberOfMessages --output text)
@@ -1282,6 +1282,257 @@ aws logs filter-log-events --log-group-name /aws/lambda/report-generator \
 - Filtra con `grep` y no con `--filter-pattern`: **LocalStack no aplica ese filtro de forma fiable**.
 - El grupo de logs se crea **en la primera invocación** de la función: antes no existe.
 
+### 8.5 Publicar desde una API Spring Boot (como hará el BFF)
+
+Hasta aquí publicaste con el CLI. En el sistema real publica el servidor (el BFF). Esta es la versión mínima de ese servidor: **sin Spring Security, sin Cognito, sin nada**, con un endpoint que publica en el topic de SNS lo que reciba. Recorre el flujo completo: **API → SNS → (filtro) → colas → Lambdas**.
+
+> **Solo para pruebas.** Un endpoint abierto que publica en un topic es un agujero de seguridad. Escucha únicamente en `127.0.0.1` y usa el puerto 8081. **No la despliegues así.** Debe correr en la **misma terminal** donde existe `TOPIC_ARN` (sección 7.2).
+
+**1. Generar el proyecto** (las notas de Gradle para Windows y redes corporativas están en la sección 4):
+
+**bash**
+```bash
+curl -s https://start.spring.io/starter.zip \
+  -d type=gradle-project -d language=java -d javaVersion=21 \
+  -d groupId=com.example -d artifactId=sns-api -d name=sns-api \
+  -d packageName=com.example.snsapi -d dependencies=web \
+  -o sns-api.zip
+mkdir sns-api && unzip -q sns-api.zip -d sns-api && rm sns-api.zip
+```
+**PowerShell**
+```powershell
+curl.exe -s https://start.spring.io/starter.zip `
+  -d type=gradle-project -d language=java -d javaVersion=21 `
+  -d groupId=com.example -d artifactId=sns-api -d name=sns-api `
+  -d packageName=com.example.snsapi -d dependencies=web `
+  -o sns-api.zip
+mkdir sns-api; tar -xf sns-api.zip -C sns-api; Remove-Item sns-api.zip
+```
+
+**2. Agregar el SDK de AWS para SNS** al final de `build.gradle`. El *BOM* (`platform`) fija las versiones de todos los módulos del SDK:
+
+**bash**
+```bash
+cat >> sns-api/build.gradle <<'EOF'
+
+dependencies {
+    implementation platform('software.amazon.awssdk:bom:2.29.52')
+    implementation 'software.amazon.awssdk:sns'
+}
+EOF
+```
+**PowerShell**
+```powershell
+@'
+
+dependencies {
+    implementation platform('software.amazon.awssdk:bom:2.29.52')
+    implementation 'software.amazon.awssdk:sns'
+}
+'@ | Add-Content -Encoding ascii sns-api/build.gradle
+```
+
+**3. El código:** un cliente de SNS y un endpoint.
+
+**bash**
+```bash
+cat > sns-api/src/main/java/com/example/snsapi/SnsConfig.java <<'EOF'
+package com.example.snsapi;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import software.amazon.awssdk.services.sns.SnsClient;
+
+@Configuration
+public class SnsConfig {
+
+    // Sin región, claves ni endpoint en el código: todo sale del entorno (AWS_REGION, credenciales y
+    // AWS_ENDPOINT_URL). Por eso el mismo código sirve para LocalStack y para AWS real.
+    @Bean
+    public SnsClient snsClient() {
+        return SnsClient.create();
+    }
+}
+EOF
+
+cat > sns-api/src/main/java/com/example/snsapi/PublishController.java <<'EOF'
+package com.example.snsapi;
+
+import java.util.Map;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import software.amazon.awssdk.services.sns.SnsClient;
+import software.amazon.awssdk.services.sns.model.PublishRequest;
+
+@RestController
+@RequestMapping("/api/test")
+public class PublishController {
+
+    private final SnsClient sns;
+    private final String topicArn;
+
+    public PublishController(SnsClient sns, @Value("${app.sns.topic-arn}") String topicArn) {
+        this.sns = sns;
+        this.topicArn = topicArn;
+    }
+
+    // Lo que llegue en el cuerpo se publica tal cual en el topic de SNS.
+    @PostMapping("/sns")
+    public ResponseEntity<Map<String, String>> publish(@RequestBody String body) {
+        String messageId = sns.publish(PublishRequest.builder()
+                .topicArn(topicArn)
+                .message(body)
+                .build()).messageId();
+        return ResponseEntity.accepted().body(Map.of("messageId", messageId, "topicArn", topicArn));
+    }
+}
+EOF
+
+cat > sns-api/src/main/resources/application.properties <<'EOF'
+spring.application.name=sns-api
+server.port=8081
+server.address=127.0.0.1
+app.sns.topic-arn=${SNS_TOPIC_ARN}
+EOF
+```
+**PowerShell**
+```powershell
+@'
+package com.example.snsapi;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import software.amazon.awssdk.services.sns.SnsClient;
+
+@Configuration
+public class SnsConfig {
+
+    // Sin region, claves ni endpoint en el codigo: todo sale del entorno (AWS_REGION, credenciales y
+    // AWS_ENDPOINT_URL). Por eso el mismo codigo sirve para LocalStack y para AWS real.
+    @Bean
+    public SnsClient snsClient() {
+        return SnsClient.create();
+    }
+}
+'@ | Set-Content -Encoding ascii sns-api/src/main/java/com/example/snsapi/SnsConfig.java
+
+@'
+package com.example.snsapi;
+
+import java.util.Map;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import software.amazon.awssdk.services.sns.SnsClient;
+import software.amazon.awssdk.services.sns.model.PublishRequest;
+
+@RestController
+@RequestMapping("/api/test")
+public class PublishController {
+
+    private final SnsClient sns;
+    private final String topicArn;
+
+    public PublishController(SnsClient sns, @Value("${app.sns.topic-arn}") String topicArn) {
+        this.sns = sns;
+        this.topicArn = topicArn;
+    }
+
+    // Lo que llegue en el cuerpo se publica tal cual en el topic de SNS.
+    @PostMapping("/sns")
+    public ResponseEntity<Map<String, String>> publish(@RequestBody String body) {
+        String messageId = sns.publish(PublishRequest.builder()
+                .topicArn(topicArn)
+                .message(body)
+                .build()).messageId();
+        return ResponseEntity.accepted().body(Map.of("messageId", messageId, "topicArn", topicArn));
+    }
+}
+'@ | Set-Content -Encoding ascii sns-api/src/main/java/com/example/snsapi/PublishController.java
+
+@'
+spring.application.name=sns-api
+server.port=8081
+server.address=127.0.0.1
+app.sns.topic-arn=${SNS_TOPIC_ARN}
+'@ | Set-Content -Encoding ascii sns-api/src/main/resources/application.properties
+```
+- **`SnsClient.create()`** no recibe nada: el SDK busca por sí solo la región (`AWS_REGION`), las credenciales y el endpoint (`AWS_ENDPOINT_URL`). Es lo que permite pasar de LocalStack a AWS real sin tocar el código.
+- **`@RequestBody String`** recibe el cuerpo crudo, sin interpretarlo: publica exactamente lo que le mandes.
+- **`publish` sin atributos de mensaje:** el filtro de las suscripciones mira el campo `type` **dentro** del JSON del cuerpo (sección 7.1).
+- **`server.address=127.0.0.1`**: solo tu máquina puede llamarla.
+
+**4. Arrancarla** (**terminal C**, con el perfil de la sección 3 activo y `TOPIC_ARN` definida). Es un proceso que no termina:
+
+**bash**
+```bash
+cd ~/aws-local/sns-api
+[[ "$TOPIC_ARN" == arn:aws:sns:* ]] || { echo "TOPIC_ARN no es un ARN válido (repite la sección 7.2)"; false; } && \
+AWS_ENDPOINT_URL=http://localhost:4566 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
+AWS_REGION=us-east-2 SNS_TOPIC_ARN="$TOPIC_ARN" \
+./gradlew bootRun
+```
+**PowerShell**
+```powershell
+cd $HOME\aws-local\sns-api
+if ($TOPIC_ARN -notlike "arn:aws:sns:*") { throw "TOPIC_ARN no es un ARN válido (repite la sección 7.2)" }
+$env:AWS_ENDPOINT_URL = "http://localhost:4566"
+$env:AWS_ACCESS_KEY_ID = "test"
+$env:AWS_SECRET_ACCESS_KEY = "test"
+$env:AWS_REGION = "us-east-2"
+$env:SNS_TOPIC_ARN = $TOPIC_ARN
+.\gradlew.bat bootRun
+```
+- La primera línea **comprueba que `TOPIC_ARN` sea un ARN válido** antes de arrancar. Si esa variable estuviera vacía, la API arrancaría igual, pero cada llamada fallaría con `500` y `InvalidParameterException: Invalid parameter: TopicArn Reason: An ARN must have at least 6 elements, not 1` ("un ARN tiene al menos 6 elementos, y esto tiene 1"). Para recuperar la variable: `TOPIC_ARN=$(aws sns list-topics --query "Topics[?contains(TopicArn,'report-events')].TopicArn | [0]" --output text)` (en PowerShell, `$TOPIC_ARN = aws sns list-topics --query "Topics[?contains(TopicArn,'report-events')].TopicArn | [0]" --output text`). Si imprime `None`, el topic no existe: repite las secciones 6 y 7.
+- Las variables `AWS_*` apuntan el SDK a LocalStack con claves falsas. Está lista cuando aparece `Started SnsApiApplication`.
+
+**5. Publicar por la API y comprobar** (en la terminal A). El mensaje tiene la forma que esperan las Lambdas, con una marca única:
+
+**bash**
+```bash
+MARK4="api-$(date +%s)"
+curl -s -i -X POST http://localhost:8081/api/test/sns -H "Content-Type: application/json" \
+  -d "{\"type\":\"report.requested\",\"body\":{\"requestId\":\"$MARK4\",\"requester\":\"api@ejemplo.com\",\"requesterId\":\"u-2\",\"reportType\":\"top-products\",\"params\":{},\"requestedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}" | head -1
+
+for i in $(seq 1 12); do
+  curl -s http://localhost:8082/api/saas/notices | grep -q "$MARK4" && break; sleep 5
+done
+echo -n "avisos con $MARK4: "; curl -s http://localhost:8082/api/saas/notices | grep -c "$MARK4"
+echo -n "filas en Postgres con $MARK4: "
+docker compose exec -T postgres psql -U app -d reports -t -A -c "SELECT count(*) FROM report_requests WHERE id='$MARK4'"
+```
+**PowerShell**
+```powershell
+$MARK4 = "api-" + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$now = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+@"
+{"type":"report.requested","body":{"requestId":"$MARK4","requester":"api@ejemplo.com","requesterId":"u-2","reportType":"top-products","params":{},"requestedAt":"$now"}}
+"@ | Set-Content -Encoding ascii msg-api.json
+curl.exe -s -i -X POST http://localhost:8081/api/test/sns -H "Content-Type: application/json" --data "@msg-api.json" | Select-Object -First 1
+
+for ($i = 0; $i -lt 12; $i++) {
+  if ((curl.exe -s http://localhost:8082/api/saas/notices) -match $MARK4) { break }; Start-Sleep 5
+}
+"aviso con ${MARK4}: " + (((curl.exe -s http://localhost:8082/api/saas/notices) -match $MARK4))
+"filas en Postgres con ${MARK4}: " + (docker compose exec -T postgres psql -U app -d reports -t -A -c "SELECT count(*) FROM report_requests WHERE id='$MARK4'")
+```
+- La API responde `HTTP/1.1 202` (SNS aceptó el mensaje); el resto comprueba que **las dos Lambdas lo procesaron**: 1 aviso y 1 fila.
+- Un mensaje con otro `type` (por ejemplo `{"type":"otro","body":{}}`) también recibe `202`, pero **ninguna Lambda lo ve**: SNS decide a quién le llega cada mensaje, a diferencia de enviar directo a una cola.
+- Para detener la API, `Ctrl+C` en la terminal C; para borrar el proyecto: `rm -rf ~/aws-local/sns-api` (PowerShell: `Remove-Item -Recurse -Force $HOME\aws-local\sns-api`).
+
+**Para AWS real, esta API cambiaría así** (el código no):
+- **Se quitan** `AWS_ENDPOINT_URL` y las claves `test`: el servidor usa el rol de la instancia EC2.
+- **`SNS_TOPIC_ARN`** pasa a ser el ARN real del topic.
+- **El rol necesita permiso** `sns:Publish` sobre ese topic: es lo que ya usa el BFF del proyecto.
+- **El endpoint no puede quedar abierto:** en real iría detrás de autenticación (Cognito en el BFF) y el mensaje no lo armaría quien llama, sino el servidor a partir del JWT, para que decida quién es el `requester`.
+
 ---
 
 ## 9. Pasar a AWS real
@@ -1295,13 +1546,13 @@ Los mismos pasos, con estos cambios. **El código de las Lambdas y del proyecto 
 | Runtime | `nodejs20.x` | `nodejs22.x` |
 | `DATABASE_URL` | `postgresql://app:app@postgres:5432/reports` | la cadena de Supabase (con su contraseña) |
 | `DATABASE_SSL` | `false` | no definirla (SSL activo) |
-| `NOTICE_URL` | `http://host.docker.internal:8082/api/notice` | `https://api.claudioviajando.com/api/notice` |
+| `NOTICE_URL` | `http://host.docker.internal:8082/api/saas/notices` | `https://app.claudioviajando.com/api/saas/notices` (la URL del sitio + `/api/saas/notices`) |
 | `NOTICE_API_KEY` | `clave-local` | la clave real (solo en secretos, nunca en git ni en archivos) |
 | Política de la cola | no se exige | **obligatoria** (el bloque 3 de la sección 7.3 ya la crea) |
 | Quién publica en SNS | el `aws sns publish` de la guía | el BFF, con permiso `sns:Publish` en su rol |
 | El servicio de avisos | proyecto Spring Boot local | el servicio real, ya desplegado |
 
-> **Verifica el contrato del servicio real.** En local, `/api/notice` recibe `{"text": "…"}` con la cabecera `Authorization: ApiKey …`. La versión anterior de este proyecto publicaba en `https://app.claudioviajando.com/api/saas/notices` con esa misma forma. Antes de apuntar `NOTICE_URL` a `api.claudioviajando.com/api/notice`, confirma con una prueba (un `curl` con tu clave) que esa ruta acepta ese cuerpo y esa cabecera.
+> **El contrato del servicio real está verificado.** `POST https://app.claudioviajando.com/api/saas/notices` con `Authorization: ApiKey <clave>` y cuerpo `{"text": "…"}` responde `201` (se probó el flujo completo de esta guía contra él). El servicio de avisos de la sección 4 imita exactamente esa ruta, cabecera y cuerpo; por eso el código de la Lambda no cambia entre local y real. Ojo con la URL: es la del **sitio** (`app.…`), no `api.…`, y termina en `/api/saas/notices`; una ruta equivocada devuelve una página HTML de nginx (405) o un 404, y la Lambda lo trata como error.
 
 **El rol de las Lambdas (en real).** Necesita una política de confianza que deje a Lambda asumirlo y permisos para leer la cola y escribir logs:
 
@@ -1340,7 +1591,7 @@ Y detén el servicio de avisos con `Ctrl+C` en la terminal B. **LocalStack pierd
 | `aws sts get-caller-identity` muestra una cuenta de 12 dígitos distinta de `000000000000` | Estás apuntando a AWS real | Detente. `export AWS_PROFILE=localstack` (o `$env:AWS_PROFILE`) |
 | `Could not connect to the endpoint URL` | LocalStack no está arriba, o el perfil no tiene `endpoint_url` | `docker compose ps`; `aws configure list` |
 | La Lambda 1 falla: `getaddrinfo ENOTFOUND postgres` | La Lambda no está en la red del compose | Comprueba `LAMBDA_DOCKER_NETWORK: aws-local-net` y **recrea** el contenedor de LocalStack (`docker compose up -d --force-recreate localstack`), luego repite las secciones 6 y 7 |
-| La Lambda 2 falla: `fetch failed` / `ECONNREFUSED` | El servicio de avisos no está arriba; o el firewall bloquea el puerto 8082; o en **Mac/Windows** se definió `LAMBDA_FLAGS` con `--add-host=…host-gateway` (rompe `host.docker.internal`); o en **Linux** falta definirla | Terminal B corriendo y `curl http://localhost:8082/api/notice`; acepta el firewall; Mac/Windows: `unset LAMBDA_FLAGS` y recrea con `docker compose up -d --force-recreate localstack`; Linux: `export LAMBDA_FLAGS=…` y recrea |
+| La Lambda 2 falla: `fetch failed` / `ECONNREFUSED` | El servicio de avisos no está arriba; o el firewall bloquea el puerto 8082; o en **Mac/Windows** se definió `LAMBDA_FLAGS` con `--add-host=…host-gateway` (rompe `host.docker.internal`); o en **Linux** falta definirla | Terminal B corriendo y `curl http://localhost:8082/api/saas/notices`; acepta el firewall; Mac/Windows: `unset LAMBDA_FLAGS` y recrea con `docker compose up -d --force-recreate localstack`; Linux: `export LAMBDA_FLAGS=…` y recrea |
 | La Lambda 2 falla: `HTTP 401` | `NOTICE_API_KEY` de la Lambda distinta de la del servicio | Misma clave en `env-generator.json` y al arrancar el servicio |
 | Publicas y no llega nada, sin errores | El `type` no cumple ningún filtro (sección 8.3) | Compara `type` con la tabla de la sección 7.1 |
 | Un mensaje aparece en la DLQ | Falló 3 veces | Mira el log de la Lambda: `errorMessage` |
