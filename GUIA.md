@@ -37,7 +37,8 @@ El repo **#1 es el punto de entrada**: contiene las instrucciones y las herramie
 | Entender qué hace el sistema | 1 |
 | Montar el proyecto en una máquina nueva | 2, luego 6 |
 | Programar y probar sin tocar AWS | 6 |
-| Construir todo a mano en LocalStack, entendiendo cada comando | [GUIA-LOCALSTACK-MANUAL.md](GUIA-LOCALSTACK-MANUAL.md) |
+| **Construir todo a mano, en orden, entendiendo cada comando (recomendada)** | [GUIA-LOCAL-PASO-A-PASO.md](GUIA-LOCAL-PASO-A-PASO.md) |
+| Referencia extensa de LocalStack y de AWS real | [GUIA-LOCALSTACK-MANUAL.md](GUIA-LOCALSTACK-MANUAL.md) |
 | Recrear la infraestructura en una cuenta de AWS | 3, 4 y 5 |
 | Algo no funciona | 8 |
 
